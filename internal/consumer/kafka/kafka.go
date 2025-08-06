@@ -3,7 +3,6 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/Ygohr/orders-kafka-consumer-service/internal/config"
 	"github.com/Ygohr/orders-kafka-consumer-service/internal/consumer"
 	"github.com/Ygohr/orders-kafka-consumer-service/internal/consumer/models"
+	"github.com/Ygohr/orders-kafka-consumer-service/internal/logger"
 	"github.com/Ygohr/orders-kafka-consumer-service/internal/service"
 )
 
@@ -24,39 +24,41 @@ type KafkaConsumer struct {
 	cancel       context.CancelFunc
 	groupHandler *consumerGroupHandler
 	dlqService   *service.DLQService
+	logger       logger.Logger
 }
 
 type consumerGroupHandler struct {
 	handlers   map[string]consumer.MessageHandler
 	mu         sync.RWMutex
 	dlqService *service.DLQService
+	logger     logger.Logger
 }
 
 func (h *consumerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
-	log.Printf("Consumer group session setup")
+	h.logger.Infof("Consumer group session setup")
 	return nil
 }
 
 func (h *consumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
-	log.Printf("Consumer group session cleanup")
+	h.logger.Infof("Consumer group session cleanup")
 	return nil
 }
 
 func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	log.Printf("Starting to consume claims for topic: %s, partition: %d", claim.Topic(), claim.InitialOffset())
+	h.logger.Infof("Starting to consume claims for topic: %s, partition: %d", claim.Topic(), claim.InitialOffset())
 
 	for {
 		select {
 		case <-session.Context().Done():
-			log.Printf("Session context done for topic: %s", claim.Topic())
+			h.logger.Infof("Session context done for topic: %s", claim.Topic())
 			return nil
 		case msg, ok := <-claim.Messages():
 			if !ok {
-				log.Printf("Message channel closed for topic: %s", claim.Topic())
+				h.logger.Infof("Message channel closed for topic: %s", claim.Topic())
 				return nil
 			}
 
-			log.Printf("Received message from topic: %s, partition: %d, offset: %d",
+			h.logger.Infof("Received message from topic: %s, partition: %d, offset: %d",
 				msg.Topic, msg.Partition, msg.Offset)
 
 			message := models.Message{
@@ -78,17 +80,17 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 
 			if exists {
 				if err := h.processMessageWithRetry(session.Context(), message, handler); err != nil {
-					log.Printf("Failed to process message after retries from topic %s: %v", message.Topic, err)
+					h.logger.Errorf("Failed to process message after retries from topic %s: %v", message.Topic, err)
 					if h.dlqService != nil {
 						if dlqErr := h.dlqService.SendToDLQ(session.Context(), message, err, 3); dlqErr != nil {
-							log.Printf("Failed to send message to DLQ: %v", dlqErr)
+							h.logger.Errorf("Failed to send message to DLQ: %v", dlqErr)
 						}
 					}
 				} else {
-					log.Printf("Successfully processed message from topic: %s", message.Topic)
+					h.logger.Infof("Successfully processed message from topic: %s", message.Topic)
 				}
 			} else {
-				log.Printf("No handler found for topic: %s", message.Topic)
+				h.logger.Warnf("No handler found for topic: %s", message.Topic)
 			}
 
 			session.MarkMessage(msg, "")
@@ -106,7 +108,7 @@ func (h *consumerGroupHandler) processMessageWithRetry(ctx context.Context, mess
 			return nil
 		}
 
-		log.Printf("Attempt %d/%d failed for message from topic %s: %v", attempt, maxRetries, message.Topic, err)
+		h.logger.Warnf("Attempt %d/%d failed for message from topic %s: %v", attempt, maxRetries, message.Topic, err)
 
 		if attempt == maxRetries {
 			return fmt.Errorf("failed after %d attempts: %w", maxRetries, err)
@@ -123,7 +125,7 @@ func (h *consumerGroupHandler) processMessageWithRetry(ctx context.Context, mess
 	return fmt.Errorf("unexpected error in retry logic")
 }
 
-func NewKafkaConsumer(cfg *config.Config) (*KafkaConsumer, error) {
+func NewKafkaConsumer(cfg *config.Config, log logger.Logger) (*KafkaConsumer, error) {
 	saramaConfig := sarama.NewConfig()
 
 	saramaConfig.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRoundRobin
@@ -161,15 +163,16 @@ func NewKafkaConsumer(cfg *config.Config) (*KafkaConsumer, error) {
 			cfg.KafkaPassword,
 		)
 		if err != nil {
-			log.Printf("Warning: Failed to create DLQ service: %v", err)
+			log.Warnf("Failed to create DLQ service: %v", err)
 		} else {
-			log.Printf("DLQ service initialized for topic: %s", cfg.KafkaTopicDlq)
+			log.Infof("DLQ service initialized for topic: %s", cfg.KafkaTopicDlq)
 		}
 	}
 
 	groupHandler := &consumerGroupHandler{
 		handlers:   make(map[string]consumer.MessageHandler),
 		dlqService: dlqService,
+		logger:     log,
 	}
 
 	return &KafkaConsumer{
@@ -178,6 +181,7 @@ func NewKafkaConsumer(cfg *config.Config) (*KafkaConsumer, error) {
 		handlers:     make(map[string]consumer.MessageHandler),
 		groupHandler: groupHandler,
 		dlqService:   dlqService,
+		logger:       log,
 	}, nil
 }
 
@@ -203,24 +207,24 @@ func (kc *KafkaConsumer) Start(ctx context.Context) error {
 		topics = append(topics, topic)
 	}
 
-	log.Printf("Starting consumer for topics: %v", topics)
+	kc.logger.Infof("Starting consumer for topics: %v", topics)
 
 	go func() {
 		for {
 			select {
 			case <-kc.ctx.Done():
-				log.Printf("Consumer context done, stopping consumer group")
+				kc.logger.Infof("Consumer context done, stopping consumer group")
 				return
 			default:
 				if err := kc.consumer.Consume(kc.ctx, topics, kc.groupHandler); err != nil {
-					log.Printf("Error from consumer: %v", err)
+					kc.logger.Errorf("Error from consumer: %v", err)
 					time.Sleep(5 * time.Second)
 				}
 			}
 		}
 	}()
 
-	log.Printf("Kafka consumer started successfully")
+	kc.logger.Infof("Kafka consumer started successfully")
 	return nil
 }
 
@@ -243,11 +247,11 @@ func (kc *KafkaConsumer) Stop(ctx context.Context) error {
 
 	if kc.dlqService != nil {
 		if err := kc.dlqService.Close(); err != nil {
-			log.Printf("Warning: Failed to close DLQ service: %v", err)
+			kc.logger.Warnf("Failed to close DLQ service: %v", err)
 		}
 	}
 
-	log.Printf("Kafka consumer stopped successfully")
+	kc.logger.Infof("Kafka consumer stopped successfully")
 	return nil
 }
 
@@ -256,7 +260,7 @@ func (kc *KafkaConsumer) Subscribe(topic string, handler consumer.MessageHandler
 	defer kc.mu.Unlock()
 
 	kc.handlers[topic] = handler
-	log.Printf("Subscribed to topic: %s", topic)
+	kc.logger.Infof("Subscribed to topic: %s", topic)
 	return nil
 }
 

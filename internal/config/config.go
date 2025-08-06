@@ -17,6 +17,8 @@ type Config struct {
 	KafkaTopic            string `mapstructure:"KAFKA_TOPIC"`
 	KafkaTopicDlq         string `mapstructure:"KAFKA_TOPIC_DLQ"`
 	TargetServiceUrl      string `mapstructure:"TARGET_SERVICE_URL"`
+	LogLevel              string `mapstructure:"LOG_LEVEL"`
+	LogDevelopment        bool   `mapstructure:"LOG_DEVELOPMENT"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -29,6 +31,8 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("KAFKA_TOPIC", "seu-topico")
 	viper.SetDefault("KAFKA_TOPIC_DLQ", "seu-topico-dlq")
 	viper.SetDefault("TARGET_SERVICE_URL", "http://localhost:8080")
+	viper.SetDefault("LOG_LEVEL", "info")
+	viper.SetDefault("LOG_DEVELOPMENT", true)
 
 	viper.SetConfigName(".env")
 	viper.SetConfigType("env")
