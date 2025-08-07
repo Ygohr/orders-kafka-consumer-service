@@ -66,6 +66,12 @@ func (a *App) setupHandlers() error {
 		return fmt.Errorf("failed to subscribe to topic: %w", err)
 	}
 
+	orderValidator := &service.OrderValidator{}
+	err = a.consumer.AddValidator(a.config.KafkaTopic, orderValidator)
+	if err != nil {
+		return fmt.Errorf("failed to add validator: %w", err)
+	}
+
 	return nil
 }
 

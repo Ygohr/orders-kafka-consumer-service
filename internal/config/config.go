@@ -23,14 +23,14 @@ type Config struct {
 
 func LoadConfig() (*Config, error) {
 	viper.SetDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-	viper.SetDefault("KAFKA_USERNAME", "exemplo")
-	viper.SetDefault("KAFKA_PASSWORD", "exemplo")
-	viper.SetDefault("KAFKA_SASL_MECHANISM", "SCRAM-SHA-256")
-	viper.SetDefault("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT")
-	viper.SetDefault("KAFKA_GROUP_ID", "seu-grupo")
-	viper.SetDefault("KAFKA_TOPIC", "seu-topico")
-	viper.SetDefault("KAFKA_TOPIC_DLQ", "seu-topico-dlq")
-	viper.SetDefault("TARGET_SERVICE_URL", "http://localhost:8080")
+	viper.SetDefault("KAFKA_USERNAME", "")
+	viper.SetDefault("KAFKA_PASSWORD", "")
+	viper.SetDefault("KAFKA_SASL_MECHANISM", "")
+	viper.SetDefault("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+	viper.SetDefault("KAFKA_GROUP_ID", "orders-consumer-group")
+	viper.SetDefault("KAFKA_TOPIC", "orders-topic")
+	viper.SetDefault("KAFKA_TOPIC_DLQ", "orders-dlq-topic")
+	viper.SetDefault("TARGET_SERVICE_URL", "http://localhost:8081/api/v1/orders")
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("LOG_DEVELOPMENT", true)
 

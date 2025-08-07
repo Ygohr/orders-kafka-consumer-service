@@ -29,6 +29,7 @@ type KafkaConsumer struct {
 
 type consumerGroupHandler struct {
 	handlers   map[string]consumer.MessageHandler
+	validators map[string]consumer.MessageValidator
 	mu         sync.RWMutex
 	dlqService *service.DLQService
 	logger     logger.Logger
@@ -45,7 +46,7 @@ func (h *consumerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
 }
 
 func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	h.logger.Infof("Starting to consume claims for topic: %s, partition: %d", claim.Topic(), claim.InitialOffset())
+	h.logger.Infof("Starting to consume claims for topic: %s, partition: %d", claim.Topic(), claim.Partition())
 
 	for {
 		select {
@@ -60,6 +61,31 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 
 			h.logger.Infof("Received message from topic: %s, partition: %d, offset: %d",
 				msg.Topic, msg.Partition, msg.Offset)
+
+			h.mu.RLock()
+			validator, hasValidator := h.validators[msg.Topic]
+			h.mu.RUnlock()
+
+			if hasValidator {
+				if err := validator.Validate(msg); err != nil {
+					h.logger.Errorf("Message validation failed for topic %s: %v", msg.Topic, err)
+					if h.dlqService != nil {
+						message := models.Message{
+							Topic:     msg.Topic,
+							Partition: msg.Partition,
+							Offset:    msg.Offset,
+							Key:       msg.Key,
+							Value:     msg.Value,
+							Headers:   make(map[string][]byte),
+						}
+						if dlqErr := h.dlqService.SendToDLQ(session.Context(), message, err, 0); dlqErr != nil {
+							h.logger.Errorf("Failed to send invalid message to DLQ: %v", dlqErr)
+						}
+					}
+					session.MarkMessage(msg, "")
+					continue
+				}
+			}
 
 			message := models.Message{
 				Topic:     msg.Topic,
@@ -171,6 +197,7 @@ func NewKafkaConsumer(cfg *config.Config, log logger.Logger) (*KafkaConsumer, er
 
 	groupHandler := &consumerGroupHandler{
 		handlers:   make(map[string]consumer.MessageHandler),
+		validators: make(map[string]consumer.MessageValidator),
 		dlqService: dlqService,
 		logger:     log,
 	}
@@ -264,8 +291,11 @@ func (kc *KafkaConsumer) Subscribe(topic string, handler consumer.MessageHandler
 	return nil
 }
 
-func (kc *KafkaConsumer) IsRunning() bool {
-	kc.mu.RLock()
-	defer kc.mu.RUnlock()
-	return kc.running
+func (kc *KafkaConsumer) AddValidator(topic string, validator consumer.MessageValidator) error {
+	kc.mu.Lock()
+	defer kc.mu.Unlock()
+
+	kc.groupHandler.validators[topic] = validator
+	kc.logger.Infof("Added validator for topic: %s", topic)
+	return nil
 }
