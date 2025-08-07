@@ -12,5 +12,5 @@ type Consumer interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Subscribe(topic string, handler MessageHandler) error
-	IsRunning() bool
+	AddValidator(topic string, validator MessageValidator) error
 }
